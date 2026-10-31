@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#172b4d">
+  <title>Caseworker task manager</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #172b4d;
+      background: #f3f6f9;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    header { background: #172b4d; color: white; padding: 1.5rem max(1.25rem, calc((100% - 1040px) / 2)); }
+    header p { margin: .35rem 0 0; color: #d7e2f1; }
+    main { width: min(100% - 2rem, 1040px); margin: 2rem auto; }
+    .panel { background: white; border: 1px solid #dce3eb; border-radius: 12px; padding: 1.25rem; box-shadow: 0 2px 8px #172b4d0a; }
+    h1 { margin: 0; font-size: 1.55rem; }
+    h2 { margin: 0 0 1rem; font-size: 1.2rem; }
+    .layout { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 1.25rem; align-items: start; }
+    label { display: block; font-weight: 600; margin: .85rem 0 .35rem; }
+    input, textarea, select, button { font: inherit; }
+    input, textarea, select { width: 100%; padding: .65rem .7rem; border: 1px solid #8997a8; border-radius: 6px; background: white; color: inherit; }
+    textarea { min-height: 100px; resize: vertical; }
+    input:focus, textarea:focus, select:focus, button:focus-visible { outline: 3px solid #ffbf47; outline-offset: 2px; }
+    button { border: 0; border-radius: 6px; background: #1d5b9e; color: white; font-weight: 600; padding: .65rem .9rem; cursor: pointer; }
+    button:hover { background: #154578; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .submit { margin-top: 1rem; width: 100%; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+    .toolbar h2 { margin: 0; }
+    .toolbar select { width: auto; min-width: 145px; }
+    .tasks { display: grid; gap: .75rem; }
+    .task { border: 1px solid #dce3eb; border-left: 5px solid #1d5b9e; border-radius: 8px; padding: 1rem; }
+    .task[data-status="Done"] { border-left-color: #16804a; }
+    .task[data-status="In Progress"] { border-left-color: #bd6b00; }
+    .task-top { display: flex; justify-content: space-between; gap: .75rem; align-items: flex-start; }
+    .task h3 { margin: 0; overflow-wrap: anywhere; }
+    .task p { margin: .5rem 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #46566b; }
+    .due { color: #46566b; font-size: .9rem; }
+    .task-actions { display: flex; justify-content: space-between; align-items: center; gap: .75rem; margin-top: .8rem; }
+    .task-actions select { max-width: 180px; }
+    .delete { background: #a4262c; }
+    .delete:hover { background: #7d171c; }
+    .empty { color: #526276; text-align: center; padding: 2rem 1rem; }
+    .message { min-height: 1.4em; margin: .75rem 0 0; color: #a4262c; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    @media (max-width: 760px) {
+      .layout { grid-template-columns: 1fr; }
+      .toolbar { align-items: flex-start; flex-direction: column; }
+      .toolbar select { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Caseworker task manager</h1>
+    <p>Keep track of work, deadlines and progress.</p>
+  </header>
+  <main>
+    <div class="layout">
+      <section class="panel" aria-labelledby="create-heading">
+        <h2 id="create-heading">Add a task</h2>
+        <form id="task-form">
+          <label for="title">Title</label>
+          <input id="title" name="title" maxlength="200" required autocomplete="off">
+          <label for="description">Description <span>(optional)</span></label>
+          <textarea id="description" name="description" maxlength="2000"></textarea>
+          <label for="due-at">Due date and time</label>
+          <input id="due-at" name="due_at" type="datetime-local" required>
+          <button class="submit" id="submit-button" type="submit">Create task</button>
+          <p class="message" id="form-message" role="alert"></p>
+        </form>
+      </section>
+      <section class="panel" aria-labelledby="tasks-heading">
+        <div class="toolbar">
+          <h2 id="tasks-heading">Tasks</h2>
+          <label class="sr-only" for="filter">Filter tasks by status</label>
+          <select id="filter">
+            <option value="All">All tasks</option>
+            <option value="To Do">To Do</option>
+            <option value="In Progress">In Progress</option>
+            <option value="Done">Done</option>
+          </select>
+        </div>
+        <p class="message" id="list-message" role="alert"></p>
+        <div id="task-list" class="tasks" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+  <script>
+    "use strict";
+    const statuses = ["To Do", "In Progress", "Done"];
+    const taskList = document.querySelector("#task-list");
+    const formMessage = document.querySelector("#form-message");
+    const listMessage = document.querySelector("#list-message");
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, options);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${response.status}).`);
+      }
+      return response.status === 204 ? null : response.json();
+    }
+
+    function element(tag, text, className) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (className) node.className = className;
+      return node;
+    }
+
+    function renderTask(task) {
+      const card = element("article", undefined, "task");
+      card.dataset.status = task.status;
+      const top = element("div", undefined, "task-top");
+      top.append(element("h3", task.title));
+      top.append(element("span", task.status));
+      card.append(top);
+      if (task.description) card.append(element("p", task.description));
+      const due = new Date(task.due_at);
+      card.append(element("div", `Due ${due.toLocaleString()}`, "due"));
+
+      const actions = element("div", undefined, "task-actions");
+      const status = document.createElement("select");
+      status.setAttribute("aria-label", `Update status for ${task.title}`);
+      for (const value of statuses) {
+        const option = element("option", value);
+        option.value = value;
+        option.selected = value === task.status;
+        status.append(option);
+      }
+      status.addEventListener("change", async () => {
+        status.disabled = true;
+        listMessage.textContent = "";
+        try {
+          await request(`/api/tasks/${task.id}/status`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: status.value })
+          });
+          await loadTasks();
+        } catch (error) {
+          listMessage.textContent = error.message;
+          status.disabled = false;
+        }
+      });
+
+      const remove = element("button", "Delete", "delete");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Delete ${task.title}`);
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(`Delete "${task.title}"?`)) return;
+        remove.disabled = true;
+        listMessage.textContent = "";
+        try {
+          await request(`/api/tasks/${task.id}`, { method: "DELETE" });
+          await loadTasks();
+        } catch (error) {
+          listMessage.textContent = error.message;
+          remove.disabled = false;
+        }
+      });
+      actions.append(status, remove);
+      card.append(actions);
+      return card;
+    }
+
+    async function loadTasks() {
+      listMessage.textContent = "";
+      taskList.replaceChildren();
+      try {
+        const { tasks } = await request("/api/tasks");
+        const filter = document.querySelector("#filter").value;
+        const visible = filter === "All" ? tasks : tasks.filter(task => task.status === filter);
+        if (visible.length === 0) {
+          taskList.append(element("p", "No tasks to show. Add a task to get started.", "empty"));
+          return;
+        }
+        for (const task of visible) taskList.append(renderTask(task));
+      } catch (error) {
+        listMessage.textContent = error.message;
+        taskList.append(element("p", "Tasks could not be loaded.", "empty"));
+      }
+    }
+
+    document.querySelector("#filter").addEventListener("change", loadTasks);
+    document.querySelector("#task-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      formMessage.textContent = "";
+      const button = document.querySelector("#submit-button");
+      button.disabled = true;
+      const form = new FormData(event.currentTarget);
+      try {
+        await request("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: form.get("title"),
+            description: form.get("description"),
+            status: "To Do",
+            due_at: form.get("due_at")
+          })
+        });
+        event.currentTarget.reset();
+        await loadTasks();
+        document.querySelector("#title").focus();
+      } catch (error) {
+        formMessage.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    loadTasks();
+  </script>
+</body>
+</html>
